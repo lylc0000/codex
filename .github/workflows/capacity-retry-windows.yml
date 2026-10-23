@@ -1,4 +1,4 @@
-name: Build and test fast capacity retry
+name: Build and test automatic capacity retry
 
 on:
   workflow_dispatch:
@@ -34,7 +34,7 @@ jobs:
         shell: pwsh
         run: cargo fmt --manifest-path codex-rs/Cargo.toml --all -- --check
 
-      - name: Test fast capacity retry
+      - name: Test automatic capacity retry
         shell: pwsh
         run: >
           cargo test --manifest-path codex-rs/Cargo.toml

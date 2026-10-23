@@ -41,12 +41,7 @@ pub(crate) struct ResponsesStreamRetryState {
 impl Default for ResponsesStreamRetryState {
     fn default() -> Self {
         let fast_server_overloaded_retry =
-            std::env::var("CODEX_CAPACITY_RETRY_FAST").is_ok_and(|value| {
-                matches!(
-                    value.trim().to_ascii_lowercase().as_str(),
-                    "1" | "true" | "yes" | "on"
-                )
-            });
+            fast_server_overloaded_retry_enabled(std::env::var("CODEX_CAPACITY_RETRY_FAST").ok());
         Self {
             retries: 0,
             server_overloaded_retries: 0,
@@ -55,6 +50,15 @@ impl Default for ResponsesStreamRetryState {
             connection_retry_delay: INITIAL_CONNECTION_RETRY_DELAY,
         }
     }
+}
+
+fn fast_server_overloaded_retry_enabled(value: Option<String>) -> bool {
+    !value.is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        )
+    })
 }
 
 /// Server retry advice retained after stream retries are exhausted. The turn ID

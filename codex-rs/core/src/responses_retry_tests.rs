@@ -1,5 +1,6 @@
 use super::ResponsesStreamRequest;
 use super::ResponsesStreamRetryState;
+use super::fast_server_overloaded_retry_enabled;
 use super::handle_response_stream_error;
 use super::log_retry;
 use crate::realtime_history::RealtimeHistoryState;
@@ -44,7 +45,7 @@ async fn server_overloaded_fast_retry_returns_ok_when_enabled() {
 }
 
 #[tokio::test]
-async fn server_overloaded_fast_retry_is_opt_in() {
+async fn server_overloaded_fast_retry_can_be_disabled() {
     let (mut session, turn_context) = make_session_and_context().await;
     let step_context = StepContext::for_test(Arc::new(turn_context));
     session.realtime_history = Some(Mutex::new(RealtimeHistoryState::default()));
@@ -67,6 +68,15 @@ async fn server_overloaded_fast_retry_is_opt_in() {
 
     assert!(result.is_err());
     assert_eq!(retry_state.server_overloaded_retries, 0);
+}
+
+#[test]
+fn server_overloaded_fast_retry_is_enabled_by_default() {
+    assert!(fast_server_overloaded_retry_enabled(None));
+    assert!(!fast_server_overloaded_retry_enabled(Some("0".to_string())));
+    assert!(!fast_server_overloaded_retry_enabled(Some(
+        "OFF".to_string()
+    )));
 }
 
 #[tokio::test]
