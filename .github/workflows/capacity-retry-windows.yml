@@ -64,7 +64,7 @@ jobs:
         shell: pwsh
         run: >
           cargo build --manifest-path codex-rs/Cargo.toml
-          --release --locked -p codex-cli --bin codex
+          --release -p codex-cli --bin codex
 
       - name: Verify executable
         shell: pwsh
