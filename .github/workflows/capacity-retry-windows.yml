@@ -1,0 +1,69 @@
+name: Build and test fast capacity retry
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - capacity-retry-fast
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.95
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.95.0
+          components: rustfmt
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: codex-rs -> target
+
+      - name: Check formatting
+        shell: pwsh
+        run: cargo fmt --manifest-path codex-rs/Cargo.toml --all -- --check
+
+      - name: Test fast capacity retry
+        shell: pwsh
+        run: >
+          cargo test --manifest-path codex-rs/Cargo.toml
+          -p codex-core server_overloaded_fast_retry_returns_ok_when_enabled
+          -- --nocapture
+
+      - name: Verify existing retry behavior remains opt-in
+        shell: pwsh
+        run: >
+          cargo test --manifest-path codex-rs/Cargo.toml
+          -p codex-core responses_http_overload_respects_retry_limits
+          -- --nocapture
+
+      - name: Build Windows Codex executable
+        shell: pwsh
+        run: >
+          cargo build --manifest-path codex-rs/Cargo.toml
+          --release --locked -p codex-cli --bin codex
+
+      - name: Verify executable
+        shell: pwsh
+        run: |
+          .\codex-rs\target\release\codex.exe --version
+          .\codex-rs\target\release\codex.exe --help | Select-Object -First 5
+
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-windows-x64-capacity-retry
+          path: codex-rs/target/release/codex.exe
+          if-no-files-found: error
+          retention-days: 14

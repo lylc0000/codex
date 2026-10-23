@@ -22,6 +22,7 @@ use tracing::warn;
 
 const INITIAL_CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(5);
 const MAX_CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(60);
+const SERVER_OVERLOADED_FAST_RETRY_DELAY: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum ResponsesStreamRequest {
@@ -31,14 +32,25 @@ pub(crate) enum ResponsesStreamRequest {
 
 pub(crate) struct ResponsesStreamRetryState {
     retries: u64,
+    server_overloaded_retries: u64,
+    fast_server_overloaded_retry: bool,
     connection_retries: u64,
     connection_retry_delay: Duration,
 }
 
 impl Default for ResponsesStreamRetryState {
     fn default() -> Self {
+        let fast_server_overloaded_retry =
+            std::env::var("CODEX_CAPACITY_RETRY_FAST").is_ok_and(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            });
         Self {
             retries: 0,
+            server_overloaded_retries: 0,
+            fast_server_overloaded_retry,
             connection_retries: 0,
             connection_retry_delay: INITIAL_CONNECTION_RETRY_DELAY,
         }
@@ -64,6 +76,39 @@ pub(crate) async fn handle_response_stream_error(
     request: ResponsesStreamRequest,
 ) -> Result<(), CodexErr> {
     let turn_context = &step_context.turn;
+    if retry_state.fast_server_overloaded_retry
+        && matches!(request, ResponsesStreamRequest::Sampling)
+        && matches!(err.details(), CodexErrorDetails::ServerOverloaded)
+        && !turn_context.session_source.is_internal()
+    {
+        retry_state.server_overloaded_retries =
+            retry_state.server_overloaded_retries.saturating_add(1);
+        let retry_count = retry_state.server_overloaded_retries;
+        warn!(
+            turn_id = %turn_context.sub_id,
+            retry_count,
+            ?SERVER_OVERLOADED_FAST_RETRY_DELAY,
+            "selected model is at capacity; retrying sampling immediately"
+        );
+        if retry_count == 1 || retry_count % 10 == 0 {
+            sess.notify_stream_error(
+                turn_context,
+                format!(
+                    "Selected model is at capacity. Retrying automatically (attempt {retry_count})."
+                ),
+                err,
+            )
+            .await;
+        }
+        codex_client::record_retry!(
+            retry_count,
+            SERVER_OVERLOADED_FAST_RETRY_DELAY,
+            RetryOperation::Sampling
+        );
+        tokio::time::sleep(SERVER_OVERLOADED_FAST_RETRY_DELAY).await;
+        return Ok(());
+    }
+
     if matches!(request, ResponsesStreamRequest::Sampling)
         && matches!(err.details(), CodexErrorDetails::ContentFilter)
     {

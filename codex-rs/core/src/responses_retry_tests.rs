@@ -14,6 +14,36 @@ use tokio::time::Instant;
 use tracing_test::internal::MockWriter;
 
 #[tokio::test]
+async fn server_overloaded_fast_retry_returns_ok_when_enabled() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let step_context = StepContext::for_test(Arc::new(turn_context));
+    session.realtime_history = Some(Mutex::new(RealtimeHistoryState::default()));
+    let mut client_session = session.services.model_client.new_session();
+    let mut retry_state = ResponsesStreamRetryState {
+        fast_server_overloaded_retry: true,
+        ..Default::default()
+    };
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        handle_response_stream_error(
+            &mut retry_state,
+            /*max_retries*/ 0,
+            CodexErr::ServerOverloaded,
+            &mut client_session,
+            &session,
+            &step_context,
+            ResponsesStreamRequest::Sampling,
+        ),
+    )
+    .await
+    .expect("fast capacity retry should not wait for the normal retry budget");
+
+    result.expect("capacity error should be retried instead of ending the turn");
+    assert_eq!(retry_state.server_overloaded_retries, 1);
+}
+
+#[tokio::test]
 async fn sampling_retry_logs_stream_error_context() {
     let (_session, turn_context) = make_session_and_context().await;
     let buffer: &'static std::sync::Mutex<Vec<u8>> =
