@@ -44,6 +44,32 @@ async fn server_overloaded_fast_retry_returns_ok_when_enabled() {
 }
 
 #[tokio::test]
+async fn server_overloaded_fast_retry_is_opt_in() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let step_context = StepContext::for_test(Arc::new(turn_context));
+    session.realtime_history = Some(Mutex::new(RealtimeHistoryState::default()));
+    let mut client_session = session.services.model_client.new_session();
+    let mut retry_state = ResponsesStreamRetryState {
+        fast_server_overloaded_retry: false,
+        ..Default::default()
+    };
+
+    let result = handle_response_stream_error(
+        &mut retry_state,
+        /*max_retries*/ 0,
+        CodexErr::ServerOverloaded,
+        &mut client_session,
+        &session,
+        &step_context,
+        ResponsesStreamRequest::Sampling,
+    )
+    .await;
+
+    assert!(result.is_err());
+    assert_eq!(retry_state.server_overloaded_retries, 0);
+}
+
+#[tokio::test]
 async fn sampling_retry_logs_stream_error_context() {
     let (_session, turn_context) = make_session_and_context().await;
     let buffer: &'static std::sync::Mutex<Vec<u8>> =

@@ -38,14 +38,7 @@ jobs:
         shell: pwsh
         run: >
           cargo test --manifest-path codex-rs/Cargo.toml
-          -p codex-core server_overloaded_fast_retry_returns_ok_when_enabled
-          -- --nocapture
-
-      - name: Verify existing retry behavior remains opt-in
-        shell: pwsh
-        run: >
-          cargo test --manifest-path codex-rs/Cargo.toml
-          -p codex-core responses_http_overload_respects_retry_limits
+          -p codex-core server_overloaded_fast_retry
           -- --nocapture
 
       - name: Build Windows Codex executable
