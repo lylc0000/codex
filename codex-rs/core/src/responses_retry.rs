@@ -22,7 +22,8 @@ use tracing::warn;
 
 const INITIAL_CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(5);
 const MAX_CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(60);
-const SERVER_OVERLOADED_FAST_RETRY_DELAY: Duration = Duration::from_millis(250);
+const SERVER_OVERLOADED_FAST_RETRY_MIN_DELAY_MS: u64 = 250;
+const SERVER_OVERLOADED_FAST_RETRY_MAX_DELAY_MS: u64 = 2500;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum ResponsesStreamRequest {
@@ -61,6 +62,14 @@ fn fast_server_overloaded_retry_enabled(value: Option<String>) -> bool {
     })
 }
 
+/// Randomized delay between fast capacity retries so the retry cadence is not
+/// mechanical and stays gentle on the backend.
+fn server_overloaded_fast_retry_delay() -> Duration {
+    Duration::from_millis(rand::random_range(
+        SERVER_OVERLOADED_FAST_RETRY_MIN_DELAY_MS..=SERVER_OVERLOADED_FAST_RETRY_MAX_DELAY_MS,
+    ))
+}
+
 /// Server retry advice retained after stream retries are exhausted. The turn ID
 /// prevents a reused Guardian session from applying advice from an earlier review.
 pub(crate) struct ExhaustedResponseRetry {
@@ -81,35 +90,42 @@ pub(crate) async fn handle_response_stream_error(
 ) -> Result<(), CodexErr> {
     let turn_context = &step_context.turn;
     if retry_state.fast_server_overloaded_retry
-        && matches!(request, ResponsesStreamRequest::Sampling)
+        && matches!(
+            request,
+            ResponsesStreamRequest::Sampling | ResponsesStreamRequest::RemoteCompactionV2
+        )
         && matches!(err.details(), CodexErrorDetails::ServerOverloaded)
-        && !turn_context.session_source.is_internal()
+        && (!turn_context.session_source.is_internal()
+            || matches!(request, ResponsesStreamRequest::RemoteCompactionV2))
     {
         retry_state.server_overloaded_retries =
             retry_state.server_overloaded_retries.saturating_add(1);
         let retry_count = retry_state.server_overloaded_retries;
+        let operation = match request {
+            ResponsesStreamRequest::Sampling => RetryOperation::Sampling,
+            ResponsesStreamRequest::RemoteCompactionV2 => RetryOperation::RemoteCompactionV2,
+        };
+        let request_label = match request {
+            ResponsesStreamRequest::Sampling => "sampling",
+            ResponsesStreamRequest::RemoteCompactionV2 => "remote compaction",
+        };
+        let delay = server_overloaded_fast_retry_delay();
         warn!(
             turn_id = %turn_context.sub_id,
             retry_count,
-            ?SERVER_OVERLOADED_FAST_RETRY_DELAY,
-            "selected model is at capacity; retrying sampling immediately"
+            ?delay,
+            "selected model is at capacity; retrying {request_label} automatically"
         );
-        if retry_count == 1 || retry_count % 10 == 0 {
-            sess.notify_stream_error(
-                turn_context,
-                format!(
-                    "Selected model is at capacity. Retrying automatically (attempt {retry_count})."
-                ),
-                err,
-            )
-            .await;
-        }
-        codex_client::record_retry!(
-            retry_count,
-            SERVER_OVERLOADED_FAST_RETRY_DELAY,
-            RetryOperation::Sampling
-        );
-        tokio::time::sleep(SERVER_OVERLOADED_FAST_RETRY_DELAY).await;
+        sess.notify_stream_error(
+            turn_context,
+            format!(
+                "Selected model is at capacity. Retrying {request_label} automatically (attempt {retry_count})."
+            ),
+            err,
+        )
+        .await;
+        codex_client::record_retry!(retry_count, delay, operation);
+        tokio::time::sleep(delay).await;
         return Ok(());
     }
 
